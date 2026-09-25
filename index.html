@@ -1189,7 +1189,7 @@ renderAnswerCard();
 renderReport();
 initCloud();
 
-function printAnswerCard(){
+async function printAnswerCard(){
   const printSel=document.getElementById('printAssessmentSelect');
   const answerCard=document.getElementById('answerCard');
   if(!printSel || !printSel.value){
@@ -1204,33 +1204,74 @@ function printAnswerCard(){
     alert('Não foi possível carregar o simulado selecionado para impressão.');
     return;
   }
+
   const printWindow=window.open('', '_blank', 'width=900,height=1200,scrollbars=yes');
   if(!printWindow){
     alert('O navegador bloqueou a janela de impressão. Permita pop-ups para este site e tente novamente.');
     return;
   }
+
   const styles=[...document.querySelectorAll('style')].map(x=>x.textContent).join('\n');
   const a=assessments.find(x=>x.code===printSel.value)||{};
   const title=escapeHtml(a.name||'Simulado');
-
-  // O QRCode da tela é desenhado em canvas. Ao usar outerHTML, os pixels
-  // do canvas não são transportados para a nova janela. Por isso, antes
-  // de imprimir, convertemos o QR em uma imagem PNG incorporada no HTML.
   const printCard=answerCard.cloneNode(true);
-  const sourceQr=answerCard.querySelector('#qrcode canvas');
   const targetQr=printCard.querySelector('#qrcode');
-  if(sourceQr && targetQr){
+
+  // QR robusto para impressão: funciona tanto quando o qrcodejs cria
+  // canvas quanto quando cria img. Se o navegador não disponibilizar
+  // nenhum deles no cartão, geramos um QR temporário e incorporamos
+  // seus pixels como PNG (data URL) antes de abrir a impressão.
+  async function getQrDataUrl(){
+    const source=answerCard.querySelector('#qrcode');
+    if(source){
+      const canvas=source.querySelector('canvas');
+      if(canvas && canvas.width>0 && canvas.height>0){
+        try{return canvas.toDataURL('image/png');}catch(e){console.warn(e)}
+      }
+      const img=source.querySelector('img');
+      if(img && img.src) return img.src;
+    }
+
+    const assessment=assessments.find(x=>x.code===printSel.value)||{};
+    const selectedId=document.getElementById('cardStudent')?.value||'';
+    const selected=students.find(x=>x.id===selectedId);
+    const payload=selected?.id
+      ? `AR|v5|${assessment.code}|STUDENT|${selected.id}`
+      : `AR|v4|${assessment.code}`;
+
+    if(typeof QRCode!=='function') return '';
+
+    const holder=document.createElement('div');
+    holder.style.cssText='position:fixed;left:-10000px;top:-10000px;width:180px;height:180px;background:#fff;';
+    document.body.appendChild(holder);
     try{
+      new QRCode(holder,{text:payload,width:180,height:180});
+      for(let i=0;i<20;i++){
+        await new Promise(r=>setTimeout(r,25));
+        const c=holder.querySelector('canvas');
+        if(c && c.width>0 && c.height>0) return c.toDataURL('image/png');
+        const im=holder.querySelector('img');
+        if(im && im.src) return im.src;
+      }
+    }finally{
+      holder.remove();
+    }
+    return '';
+  }
+
+  if(targetQr){
+    const qrDataUrl=await getQrDataUrl();
+    if(qrDataUrl){
       const qrImg=document.createElement('img');
-      qrImg.src=sourceQr.toDataURL('image/png');
+      qrImg.src=qrDataUrl;
       qrImg.alt='QR Code do simulado';
-      qrImg.style.width='22mm';
-      qrImg.style.height='22mm';
-      qrImg.style.display='block';
+      qrImg.width=180;
+      qrImg.height=180;
+      qrImg.style.cssText='width:22mm!important;height:22mm!important;display:block!important;image-rendering:auto!important;';
       targetQr.innerHTML='';
       targetQr.appendChild(qrImg);
-    }catch(e){
-      console.error('Falha ao preparar QR Code para impressão:',e);
+    }else{
+      targetQr.innerHTML='<div style="width:22mm;height:22mm;display:flex;align-items:center;justify-content:center;font-size:8px;text-align:center">QR Code indisponível</div>';
     }
   }
 
@@ -1245,8 +1286,9 @@ body{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!importa
 </style></head><body>${printCard.outerHTML}</body></html>`);
   printWindow.document.close();
   printWindow.focus();
-  setTimeout(()=>{try{printWindow.print();}catch(e){alert('Não foi possível abrir a impressão: '+e.message);}},500);
+  setTimeout(()=>{try{printWindow.print();}catch(e){alert('Não foi possível abrir a impressão: '+e.message);}},300);
 }
+
 </script>
 </body>
 </html>
